@@ -4,3 +4,19 @@ channel = "stable-24_05"
 
 [deployment]
 run = ["sh", "-c", "start"]
+
+[workflows]
+runButton = "Run Streamlit App"
+
+[[workflows.workflow]]
+name = "Run Streamlit App"
+author = 44549535
+mode = "sequential"
+
+[[workflows.workflow.tasks]]
+task = "packager.installForLanguage"
+args = "nix"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Run Streamlit App"
