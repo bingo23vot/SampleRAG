@@ -1,0 +1,9 @@
+
+streamlit
+sentence-transformers
+python-docx
+python-pptx
+PyPDF2
+PyMuPDF
+numpy
+pickle-mixin
