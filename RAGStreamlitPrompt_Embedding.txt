@@ -1,1 +1,1 @@
-I need a streamlit web application where i can upload the documents for RAG. The documents types can be: {document_types}. These documents should be embedded and stored in same file path.
+I need a streamlit web application where i can upload the documents for RAG. The documents types can be: {{document_types}}. These documents should be embedded and stored in same file path.
