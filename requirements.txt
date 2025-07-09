@@ -1,9 +1,10 @@
 
 streamlit
-sentence-transformers
+google-generativeai
 python-docx
-python-pptx
 PyPDF2
 PyMuPDF
 numpy
-pickle-mixin
+pandas
+openpyxl
+xlrd
