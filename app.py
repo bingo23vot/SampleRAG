@@ -1,16 +1,15 @@
+
 import streamlit as st
 import os
 import pickle
-from typing import List, Dict, Any
+from typing import List, Dict
 from pathlib import Path
 import tempfile
-import shutil
 
 # Document processing imports
 import PyPDF2
 from docx import Document
 import pandas as pd
-import openpyxl
 
 # LangChain imports
 from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
@@ -21,24 +20,31 @@ from langchain.chains import RetrievalQA
 from langchain_core.prompts import PromptTemplate
 
 
-# Load Gemini API key
-def load_config():
+def load_config() -> Dict[str, str]:
+    """Load configuration from application.properties file"""
     config = {}
-    with open('application.properties', 'r') as f:
-        for line in f:
-            if '=' in line and not line.strip().startswith('#'):
-                key, value = line.strip().split('=', 1)
-                config[key.strip()] = value.strip().strip('"')
+    try:
+        with open('application.properties', 'r') as f:
+            for line in f:
+                if '=' in line and not line.strip().startswith('#'):
+                    key, value = line.strip().split('=', 1)
+                    config[key.strip()] = value.strip().strip('"')
+    except FileNotFoundError:
+        st.error("application.properties file not found")
+    except Exception as e:
+        st.error(f"Error loading config: {str(e)}")
     return config
 
 
 config = load_config()
-os.environ["GOOGLE_API_KEY"] = config['GEMINI_KEY']
+if 'GEMINI_KEY' in config:
+    os.environ["GOOGLE_API_KEY"] = config['GEMINI_KEY']
 
 
 class DocumentProcessor:
+    """Class to handle document processing for various file types"""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.supported_types = ['.pdf', '.docx', '.doc', '.xlsx', '.xls']
 
     def extract_text_from_pdf(self, file_path: str) -> str:
@@ -49,6 +55,10 @@ class DocumentProcessor:
                 pdf_reader = PyPDF2.PdfReader(file)
                 for page in pdf_reader.pages:
                     text += page.extract_text() + "\n"
+        except FileNotFoundError:
+            st.error(f"PDF file not found: {file_path}")
+        except PyPDF2.errors.PdfReadError:
+            st.error("Error reading PDF: File may be corrupted or encrypted")
         except Exception as e:
             st.error(f"Error reading PDF: {str(e)}")
         return text
@@ -60,6 +70,8 @@ class DocumentProcessor:
             doc = Document(file_path)
             for paragraph in doc.paragraphs:
                 text += paragraph.text + "\n"
+        except FileNotFoundError:
+            st.error(f"DOCX file not found: {file_path}")
         except Exception as e:
             st.error(f"Error reading DOCX: {str(e)}")
         return text
@@ -68,23 +80,26 @@ class DocumentProcessor:
         """Extract text from Excel file"""
         text = ""
         try:
-            # Try reading with pandas first
             excel_file = pd.ExcelFile(file_path)
             for sheet_name in excel_file.sheet_names:
                 df = pd.read_excel(file_path, sheet_name=sheet_name)
                 text += f"Sheet: {sheet_name}\n"
                 text += df.to_string() + "\n\n"
+        except FileNotFoundError:
+            st.error(f"Excel file not found: {file_path}")
         except Exception as e:
             st.error(f"Error reading Excel: {str(e)}")
         return text
 
     def process_document(self, file_path: str, file_extension: str) -> str:
         """Process document based on file type"""
-        if file_extension.lower() == '.pdf':
+        file_ext_lower = file_extension.lower()
+        
+        if file_ext_lower == '.pdf':
             return self.extract_text_from_pdf(file_path)
-        elif file_extension.lower() in ['.docx', '.doc']:
+        elif file_ext_lower in ['.docx', '.doc']:
             return self.extract_text_from_docx(file_path)
-        elif file_extension.lower() in ['.xlsx', '.xls']:
+        elif file_ext_lower in ['.xlsx', '.xls']:
             return self.extract_text_from_excel(file_path)
         else:
             st.error(f"Unsupported file type: {file_extension}")
@@ -92,13 +107,15 @@ class DocumentProcessor:
 
 
 class RAGSystem:
+    """RAG (Retrieval-Augmented Generation) system using LangChain and Gemini"""
 
-    def __init__(self):
+    def __init__(self) -> None:
         # Initialize LangChain components
         self.embeddings = GoogleGenerativeAIEmbeddings(
             model="models/embedding-001")
-        self.llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash-exp",
-                                          temperature=0)
+        self.llm = ChatGoogleGenerativeAI(
+            model="gemini-2.0-flash-exp",
+            temperature=0)
         self.text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=1000,
             chunk_overlap=200,
@@ -111,7 +128,7 @@ class RAGSystem:
         self.documents_file = "documents.pkl"
         self.load_existing_data()
 
-    def load_existing_data(self):
+    def load_existing_data(self) -> None:
         """Load existing vectorstore and documents"""
         try:
             if os.path.exists(self.documents_file):
@@ -123,12 +140,14 @@ class RAGSystem:
                     self.vectorstore_file,
                     self.embeddings,
                     allow_dangerous_deserialization=True)
+        except FileNotFoundError:
+            st.warning("No existing data files found. Starting fresh.")
         except Exception as e:
             st.error(f"Error loading existing data: {str(e)}")
             self.documents = []
             self.vectorstore = None
 
-    def save_data(self):
+    def save_data(self) -> None:
         """Save vectorstore and documents to files"""
         try:
             if self.vectorstore:
@@ -139,15 +158,16 @@ class RAGSystem:
         except Exception as e:
             st.error(f"Error saving data: {str(e)}")
 
-    def add_document(self, file_name: str, text: str):
+    def add_document(self, file_name: str, text: str) -> int:
         """Add document using LangChain"""
         if text.strip():
             # Create LangChain document
-            doc = LangChainDocument(page_content=text,
-                                    metadata={"source": file_name})
+            langchain_doc = LangChainDocument(
+                page_content=text,
+                metadata={"source": file_name})
 
             # Split into chunks
-            chunks = self.text_splitter.split_documents([doc])
+            chunks = self.text_splitter.split_documents([langchain_doc])
 
             # Store document info
             doc_info = {
@@ -168,7 +188,7 @@ class RAGSystem:
             return len(chunks)
         return 0
 
-    def search_and_answer(self, query: str, top_k: int = 5) -> Dict[str, Any]:
+    def search_and_answer(self, query: str, top_k: int = 5) -> Dict[str, List]:
         """Search documents and generate answer using LangChain RAG"""
         if not self.vectorstore:
             return {
@@ -186,8 +206,9 @@ class RAGSystem:
             Question: {question}
             Answer:"""
 
-            prompt = PromptTemplate(template=prompt_template,
-                                    input_variables=["context", "question"])
+            prompt = PromptTemplate(
+                template=prompt_template,
+                input_variables=["context", "question"])
 
             qa_chain = RetrievalQA.from_chain_type(
                 llm=self.llm,
@@ -202,15 +223,14 @@ class RAGSystem:
 
             # Extract source information
             sources = []
-            for doc in result.get("source_documents", []):
+            for langchain_doc in result.get("source_documents", []):
+                content = langchain_doc.page_content
+                truncated_content = (content[:300] + "..." 
+                                   if len(content) > 300 else content)
                 sources.append({
-                    "content":
-                    doc.page_content[:300] +
-                    "..." if len(doc.page_content) > 300 else doc.page_content,
-                    "source":
-                    doc.metadata.get("source", "Unknown"),
-                    "full_content":
-                    doc.page_content
+                    "content": truncated_content,
+                    "source": langchain_doc.metadata.get("source", "Unknown"),
+                    "full_content": content
                 })
 
             return {"answer": result["result"], "sources": sources}
@@ -222,24 +242,21 @@ class RAGSystem:
                 "sources": []
             }
 
-    def search_similar_documents(self,
-                                 query: str,
-                                 top_k: int = 5) -> List[Dict]:
+    def search_similar_documents(self, query: str, top_k: int = 5) -> List[Dict]:
         """Search for similar documents using vectorstore"""
         if not self.vectorstore:
             return []
 
         try:
-            docs = self.vectorstore.similarity_search_with_score(query,
-                                                                 k=top_k)
+            docs = self.vectorstore.similarity_search_with_score(query, k=top_k)
             results = []
 
-            for doc, score in docs:
+            for langchain_doc, score in docs:
                 result = {
-                    'file_name': doc.metadata.get("source", "Unknown"),
-                    'text': doc.page_content,
+                    'file_name': langchain_doc.metadata.get("source", "Unknown"),
+                    'text': langchain_doc.page_content,
                     'similarity': 1 - score,  # Convert distance to similarity
-                    'full_content': doc.page_content
+                    'full_content': langchain_doc.page_content
                 }
                 results.append(result)
 
@@ -249,10 +266,12 @@ class RAGSystem:
             return []
 
 
-def main():
-    st.set_page_config(page_title="RAG Document Upload System",
-                       page_icon="📚",
-                       layout="wide")
+def main() -> None:
+    """Main application function"""
+    st.set_page_config(
+        page_title="RAG Document Upload System",
+        page_icon="📚",
+        layout="wide")
 
     st.title("📚 RAG Document Upload & Search System (LangChain)")
     st.markdown(
@@ -284,8 +303,8 @@ def main():
 
                     # Save uploaded file temporarily
                     with tempfile.NamedTemporaryFile(
-                            delete=False, suffix=Path(
-                                uploaded_file.name).suffix) as tmp_file:
+                            delete=False, 
+                            suffix=Path(uploaded_file.name).suffix) as tmp_file:
                         tmp_file.write(uploaded_file.getvalue())
                         tmp_file_path = tmp_file.name
 
@@ -312,7 +331,8 @@ def main():
 
                     finally:
                         # Clean up temporary file
-                        os.unlink(tmp_file_path)
+                        if os.path.exists(tmp_file_path):
+                            os.unlink(tmp_file_path)
 
                     progress_bar.progress((idx + 1) / total_files)
 
@@ -357,8 +377,8 @@ def main():
         st.header("📋 Search Results")
 
         if hasattr(st.session_state, 'search_type'):
-            if st.session_state.search_type == "answer" and hasattr(
-                    st.session_state, 'search_result'):
+            if (st.session_state.search_type == "answer" and 
+                hasattr(st.session_state, 'search_result')):
                 result = st.session_state.search_result
 
                 st.subheader("🤖 AI Answer:")
@@ -376,14 +396,14 @@ def main():
                                              height=300,
                                              key=f"source_full_{i}")
 
-            elif st.session_state.search_type == "similarity" and hasattr(
-                    st.session_state, 'search_results'):
+            elif (st.session_state.search_type == "similarity" and 
+                  hasattr(st.session_state, 'search_results')):
                 if st.session_state.search_results:
-                    for i, result in enumerate(
-                            st.session_state.search_results):
+                    for i, result in enumerate(st.session_state.search_results):
+                        similarity_score = result['similarity']
                         with st.expander(
-                                f"Result {i+1}: {result['file_name']} (Similarity: {result['similarity']:.3f})"
-                        ):
+                                f"Result {i+1}: {result['file_name']} "
+                                f"(Similarity: {similarity_score:.3f})"):
                             st.write("**Text snippet:**")
                             st.write(result['text'])
 
@@ -407,20 +427,27 @@ def main():
             rag_system.documents = []
             rag_system.vectorstore = None
             # Clean up saved files
-            if os.path.exists(f"{rag_system.vectorstore_file}.faiss"):
-                os.remove(f"{rag_system.vectorstore_file}.faiss")
-            if os.path.exists(f"{rag_system.vectorstore_file}.pkl"):
-                os.remove(f"{rag_system.vectorstore_file}.pkl")
+            faiss_file = f"{rag_system.vectorstore_file}.faiss"
+            pkl_file = f"{rag_system.vectorstore_file}.pkl"
+            
+            if os.path.exists(faiss_file):
+                os.remove(faiss_file)
+            if os.path.exists(pkl_file):
+                os.remove(pkl_file)
+            if os.path.exists(rag_system.documents_file):
+                os.remove(rag_system.documents_file)
+                
             rag_system.save_data()
             st.success("All documents cleared!")
             st.rerun()
 
     with col2:
         if rag_system.documents:
-            st.download_button(label="Download Document Database",
-                               data=pickle.dumps(rag_system.documents),
-                               file_name="document_database.pkl",
-                               mime="application/octet-stream")
+            st.download_button(
+                label="Download Document Database",
+                data=pickle.dumps(rag_system.documents),
+                file_name="document_database.pkl",
+                mime="application/octet-stream")
 
 
 if __name__ == "__main__":
