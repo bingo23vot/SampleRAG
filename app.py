@@ -4,7 +4,6 @@ import os
 import pickle
 import numpy as np
 from typing import List, Dict, Any
-import google.generativeai as genai
 from pathlib import Path
 import tempfile
 import shutil
@@ -14,6 +13,14 @@ import PyPDF2
 from docx import Document
 import pandas as pd
 import openpyxl
+
+# LangChain imports
+from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
+from langchain_core.documents import Document as LangChainDocument
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain.vectorstores import FAISS
+from langchain.chains import RetrievalQA
+from langchain_core.prompts import PromptTemplate
 
 # Load Gemini API key
 def load_config():
@@ -26,7 +33,7 @@ def load_config():
     return config
 
 config = load_config()
-genai.configure(api_key=config['GEMINI_KEY'])
+os.environ["GOOGLE_API_KEY"] = config['GEMINI_KEY']
 
 class DocumentProcessor:
     def __init__(self):
@@ -81,147 +88,154 @@ class DocumentProcessor:
             st.error(f"Unsupported file type: {file_extension}")
             return ""
 
-class GeminiEmbeddings:
-    def __init__(self):
-        self.model = genai.GenerativeModel('gemini-2.0-flash-exp')
-    
-    def get_embedding(self, text: str) -> List[float]:
-        """Get embedding for text using Gemini"""
-        try:
-            # For Gemini 2.0 Flash, we'll use the embedding API
-            result = genai.embed_content(
-                model="models/text-embedding-004",
-                content=text,
-                task_type="retrieval_document"
-            )
-            return result['embedding']
-        except Exception as e:
-            st.error(f"Error generating embedding: {str(e)}")
-            return []
-    
-    def get_query_embedding(self, query: str) -> List[float]:
-        """Get embedding for query"""
-        try:
-            result = genai.embed_content(
-                model="models/text-embedding-004",
-                content=query,
-                task_type="retrieval_query"
-            )
-            return result['embedding']
-        except Exception as e:
-            st.error(f"Error generating query embedding: {str(e)}")
-            return []
-
 class RAGSystem:
     def __init__(self):
-        self.embeddings_model = GeminiEmbeddings()
+        # Initialize LangChain components
+        self.embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
+        self.llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash-exp", temperature=0)
+        self.text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=1000,
+            chunk_overlap=200,
+            separators=["\n\n", "\n", " ", ""]
+        )
+        
         self.doc_processor = DocumentProcessor()
+        self.vectorstore = None
         self.documents = []
-        self.embeddings = []
-        self.embeddings_file = "document_embeddings.pkl"
+        self.vectorstore_file = "vectorstore"
         self.documents_file = "documents.pkl"
         self.load_existing_data()
     
     def load_existing_data(self):
-        """Load existing embeddings and documents"""
+        """Load existing vectorstore and documents"""
         try:
-            if os.path.exists(self.embeddings_file):
-                with open(self.embeddings_file, 'rb') as f:
-                    self.embeddings = pickle.load(f)
             if os.path.exists(self.documents_file):
                 with open(self.documents_file, 'rb') as f:
                     self.documents = pickle.load(f)
+            
+            if os.path.exists(f"{self.vectorstore_file}.faiss"):
+                self.vectorstore = FAISS.load_local(
+                    self.vectorstore_file,
+                    self.embeddings,
+                    allow_dangerous_deserialization=True
+                )
         except Exception as e:
             st.error(f"Error loading existing data: {str(e)}")
             self.documents = []
-            self.embeddings = []
+            self.vectorstore = None
     
     def save_data(self):
-        """Save embeddings and documents to files"""
+        """Save vectorstore and documents to files"""
         try:
-            with open(self.embeddings_file, 'wb') as f:
-                pickle.dump(self.embeddings, f)
+            if self.vectorstore:
+                self.vectorstore.save_local(self.vectorstore_file)
+            
             with open(self.documents_file, 'wb') as f:
                 pickle.dump(self.documents, f)
         except Exception as e:
             st.error(f"Error saving data: {str(e)}")
     
     def add_document(self, file_name: str, text: str):
-        """Add document and generate embedding"""
+        """Add document using LangChain"""
         if text.strip():
-            # Split text into chunks if it's too long
-            chunks = self.split_text(text, max_length=1000)
+            # Create LangChain document
+            doc = LangChainDocument(
+                page_content=text,
+                metadata={"source": file_name}
+            )
             
-            for i, chunk in enumerate(chunks):
-                embedding = self.embeddings_model.get_embedding(chunk)
-                if embedding:
-                    doc_info = {
-                        'file_name': file_name,
-                        'chunk_id': i,
-                        'text': chunk,
-                        'full_text': text
-                    }
-                    self.documents.append(doc_info)
-                    self.embeddings.append(embedding)
+            # Split into chunks
+            chunks = self.text_splitter.split_documents([doc])
+            
+            # Store document info
+            doc_info = {
+                'file_name': file_name,
+                'text': text,
+                'chunks': len(chunks)
+            }
+            self.documents.append(doc_info)
+            
+            # Create or update vectorstore
+            if self.vectorstore is None:
+                self.vectorstore = FAISS.from_documents(chunks, self.embeddings)
+            else:
+                self.vectorstore.add_documents(chunks)
             
             self.save_data()
             return len(chunks)
         return 0
     
-    def split_text(self, text: str, max_length: int = 1000) -> List[str]:
-        """Split text into chunks"""
-        words = text.split()
-        chunks = []
-        current_chunk = []
-        current_length = 0
+    def search_and_answer(self, query: str, top_k: int = 5) -> Dict[str, Any]:
+        """Search documents and generate answer using LangChain RAG"""
+        if not self.vectorstore:
+            return {"answer": "No documents available for search.", "sources": []}
         
-        for word in words:
-            if current_length + len(word) + 1 > max_length:
-                if current_chunk:
-                    chunks.append(' '.join(current_chunk))
-                    current_chunk = [word]
-                    current_length = len(word)
-                else:
-                    chunks.append(word)
-            else:
-                current_chunk.append(word)
-                current_length += len(word) + 1
-        
-        if current_chunk:
-            chunks.append(' '.join(current_chunk))
-        
-        return chunks
+        try:
+            # Create retrieval QA chain
+            prompt_template = """Use the following pieces of context to answer the question at the end. 
+            If you don't know the answer, just say that you don't know, don't try to make up an answer.
+
+            Context: {context}
+
+            Question: {question}
+            Answer:"""
+            
+            prompt = PromptTemplate(
+                template=prompt_template,
+                input_variables=["context", "question"]
+            )
+            
+            qa_chain = RetrievalQA.from_chain_type(
+                llm=self.llm,
+                chain_type="stuff",
+                retriever=self.vectorstore.as_retriever(search_kwargs={"k": top_k}),
+                chain_type_kwargs={"prompt": prompt},
+                return_source_documents=True
+            )
+            
+            # Get answer
+            result = qa_chain({"query": query})
+            
+            # Extract source information
+            sources = []
+            for doc in result.get("source_documents", []):
+                sources.append({
+                    "content": doc.page_content[:300] + "..." if len(doc.page_content) > 300 else doc.page_content,
+                    "source": doc.metadata.get("source", "Unknown"),
+                    "full_content": doc.page_content
+                })
+            
+            return {
+                "answer": result["result"],
+                "sources": sources
+            }
+            
+        except Exception as e:
+            st.error(f"Error in search and answer: {str(e)}")
+            return {"answer": "An error occurred while processing your query.", "sources": []}
     
     def search_similar_documents(self, query: str, top_k: int = 5) -> List[Dict]:
-        """Search for similar documents"""
-        if not self.embeddings:
+        """Search for similar documents using vectorstore"""
+        if not self.vectorstore:
             return []
         
-        query_embedding = self.embeddings_model.get_query_embedding(query)
-        if not query_embedding:
+        try:
+            docs = self.vectorstore.similarity_search_with_score(query, k=top_k)
+            results = []
+            
+            for doc, score in docs:
+                result = {
+                    'file_name': doc.metadata.get("source", "Unknown"),
+                    'text': doc.page_content,
+                    'similarity': 1 - score,  # Convert distance to similarity
+                    'full_content': doc.page_content
+                }
+                results.append(result)
+            
+            return results
+        except Exception as e:
+            st.error(f"Error searching documents: {str(e)}")
             return []
-        
-        # Calculate cosine similarity
-        similarities = []
-        for i, doc_embedding in enumerate(self.embeddings):
-            similarity = self.cosine_similarity(query_embedding, doc_embedding)
-            similarities.append((similarity, i))
-        
-        # Sort by similarity and return top k
-        similarities.sort(reverse=True)
-        results = []
-        for similarity, idx in similarities[:top_k]:
-            result = self.documents[idx].copy()
-            result['similarity'] = similarity
-            results.append(result)
-        
-        return results
-    
-    def cosine_similarity(self, vec1: List[float], vec2: List[float]) -> float:
-        """Calculate cosine similarity between two vectors"""
-        vec1 = np.array(vec1)
-        vec2 = np.array(vec2)
-        return np.dot(vec1, vec2) / (np.linalg.norm(vec1) * np.linalg.norm(vec2))
 
 def main():
     st.set_page_config(
@@ -230,8 +244,8 @@ def main():
         layout="wide"
     )
     
-    st.title("📚 RAG Document Upload & Search System")
-    st.markdown("Upload documents (PDF, DOC, DOCX, XLS, XLSX) and search through them using Gemini 2.0 Flash embeddings")
+    st.title("📚 RAG Document Upload & Search System (LangChain)")
+    st.markdown("Upload documents (PDF, DOC, DOCX, XLS, XLSX) and search through them using LangChain with Gemini embeddings")
     
     # Initialize RAG system
     if 'rag_system' not in st.session_state:
@@ -292,32 +306,56 @@ def main():
         st.header("🔍 Search Documents")
         
         # Display current document count
-        st.info(f"📊 Documents in database: {len(set(doc['file_name'] for doc in rag_system.documents))}")
-        st.info(f"📝 Total chunks: {len(rag_system.documents)}")
+        st.info(f"📊 Documents in database: {len(rag_system.documents)}")
+        total_chunks = sum(doc.get('chunks', 0) for doc in rag_system.documents)
+        st.info(f"📝 Total chunks: {total_chunks}")
         
         # Search interface
         search_query = st.text_area("Enter your search query:", height=100)
         top_k = st.slider("Number of results:", min_value=1, max_value=10, value=5)
         
+        search_type = st.radio("Search Type:", ["Answer with AI", "Similar Documents"])
+        
         if st.button("Search") and search_query:
             with st.spinner("Searching..."):
-                results = rag_system.search_similar_documents(search_query, top_k)
-                st.session_state.search_results = results
+                if search_type == "Answer with AI":
+                    result = rag_system.search_and_answer(search_query, top_k)
+                    st.session_state.search_result = result
+                    st.session_state.search_type = "answer"
+                else:
+                    results = rag_system.search_similar_documents(search_query, top_k)
+                    st.session_state.search_results = results
+                    st.session_state.search_type = "similarity"
     
     with col2:
         st.header("📋 Search Results")
         
-        if hasattr(st.session_state, 'search_results') and st.session_state.search_results:
-            for i, result in enumerate(st.session_state.search_results):
-                with st.expander(f"Result {i+1}: {result['file_name']} (Similarity: {result['similarity']:.3f})"):
-                    st.write("**Text snippet:**")
-                    st.write(result['text'])
-                    
-                    if st.button(f"Show full document", key=f"show_full_{i}"):
-                        st.text_area("Full document:", result['full_text'], height=300, key=f"full_text_{i}")
-        
-        elif hasattr(st.session_state, 'search_results'):
-            st.info("No results found. Try a different query.")
+        if hasattr(st.session_state, 'search_type'):
+            if st.session_state.search_type == "answer" and hasattr(st.session_state, 'search_result'):
+                result = st.session_state.search_result
+                
+                st.subheader("🤖 AI Answer:")
+                st.write(result["answer"])
+                
+                if result["sources"]:
+                    st.subheader("📚 Sources:")
+                    for i, source in enumerate(result["sources"]):
+                        with st.expander(f"Source {i+1}: {source['source']}"):
+                            st.write(source["content"])
+                            if st.button(f"Show full content", key=f"show_source_{i}"):
+                                st.text_area("Full content:", source["full_content"], height=300, key=f"source_full_{i}")
+            
+            elif st.session_state.search_type == "similarity" and hasattr(st.session_state, 'search_results'):
+                if st.session_state.search_results:
+                    for i, result in enumerate(st.session_state.search_results):
+                        with st.expander(f"Result {i+1}: {result['file_name']} (Similarity: {result['similarity']:.3f})"):
+                            st.write("**Text snippet:**")
+                            st.write(result['text'])
+                            
+                            if st.button(f"Show full content", key=f"show_full_{i}"):
+                                st.text_area("Full content:", result['full_content'], height=300, key=f"full_text_{i}")
+                else:
+                    st.info("No results found. Try a different query.")
         else:
             st.info("Enter a search query to see results here.")
     
@@ -328,7 +366,12 @@ def main():
     with col1:
         if st.button("Clear All Documents"):
             rag_system.documents = []
-            rag_system.embeddings = []
+            rag_system.vectorstore = None
+            # Clean up saved files
+            if os.path.exists(f"{rag_system.vectorstore_file}.faiss"):
+                os.remove(f"{rag_system.vectorstore_file}.faiss")
+            if os.path.exists(f"{rag_system.vectorstore_file}.pkl"):
+                os.remove(f"{rag_system.vectorstore_file}.pkl")
             rag_system.save_data()
             st.success("All documents cleared!")
             st.rerun()
