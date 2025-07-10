@@ -9,7 +9,6 @@ import tempfile
 # Document processing imports
 import PyPDF2
 from docx import Document
-import pandas as pd
 
 # LangChain imports
 from langchain_ollama import OllamaEmbeddings, ChatOllama
@@ -43,7 +42,7 @@ class DocumentProcessor:
     """Class to handle document processing for various file types"""
 
     def __init__(self) -> None:
-        self.supported_types = ['.pdf', '.docx', '.doc', '.xlsx', '.xls']
+        self.supported_types = ['.pdf', '.docx', '.doc']
 
     def extract_text_from_pdf(self, file_path: str) -> str:
         """Extract text from PDF file"""
@@ -74,20 +73,7 @@ class DocumentProcessor:
             st.error(f"Error reading DOCX: {str(e)}")
         return text
 
-    def extract_text_from_excel(self, file_path: str) -> str:
-        """Extract text from Excel file"""
-        text = ""
-        try:
-            excel_file = pd.ExcelFile(file_path)
-            for sheet_name in excel_file.sheet_names:
-                df = pd.read_excel(file_path, sheet_name=sheet_name)
-                text += f"Sheet: {sheet_name}\n"
-                text += df.to_string() + "\n\n"
-        except FileNotFoundError:
-            st.error(f"Excel file not found: {file_path}")
-        except Exception as e:
-            st.error(f"Error reading Excel: {str(e)}")
-        return text
+    
 
     def process_document(self, file_path: str, file_extension: str) -> str:
         """Process document based on file type"""
@@ -97,8 +83,6 @@ class DocumentProcessor:
             return self.extract_text_from_pdf(file_path)
         elif file_ext_lower in ['.docx', '.doc']:
             return self.extract_text_from_docx(file_path)
-        elif file_ext_lower in ['.xlsx', '.xls']:
-            return self.extract_text_from_excel(file_path)
         else:
             st.error(f"Unsupported file type: {file_extension}")
             return ""
@@ -282,7 +266,7 @@ def main() -> None:
 
     st.title("📚 RAG Document Upload & Search System (LangChain + Ollama)")
     st.markdown(
-        "Upload documents (PDF, DOC, DOCX, XLS, XLSX) and search through them using LangChain with Ollama embeddings"
+        "Upload documents (PDF, DOC, DOCX) and search through them using LangChain with Ollama embeddings"
     )
 
     # Initialize RAG system
@@ -297,7 +281,7 @@ def main() -> None:
 
         uploaded_files = st.file_uploader(
             "Choose files",
-            type=['pdf', 'docx', 'doc', 'xlsx', 'xls'],
+            type=['pdf', 'docx', 'doc'],
             accept_multiple_files=True)
 
         if uploaded_files:
