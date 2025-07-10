@@ -37,8 +37,6 @@ def load_config() -> Dict[str, str]:
 
 
 config = load_config()
-if 'GEMINI_KEY' in config:
-    os.environ["GOOGLE_API_KEY"] = config['GEMINI_KEY']
 
 
 class DocumentProcessor:
@@ -107,15 +105,24 @@ class DocumentProcessor:
 
 
 class RAGSystem:
-    """RAG (Retrieval-Augmented Generation) system using LangChain and Gemini"""
+    """RAG (Retrieval-Augmented Generation) system using LangChain and Ollama"""
 
     def __init__(self) -> None:
-        # Initialize LangChain components
-        self.embeddings = GoogleGenerativeAIEmbeddings(
-            model="models/embedding-001")
-        self.llm = ChatGoogleGenerativeAI(
-            model="gemini-2.0-flash-exp",
-            temperature=0)
+        # Initialize LangChain components with Ollama
+        try:
+            self.embeddings = OllamaEmbeddings(
+                model="nomic-embed-text",
+                base_url="http://localhost:11434"
+            )
+            self.llm = ChatOllama(
+                model="llama3.2",
+                base_url="http://localhost:11434",
+                temperature=0
+            )
+        except Exception as e:
+            st.error(f"Error initializing Ollama models: {str(e)}")
+            st.info("Make sure Ollama is running with the required models installed")
+            
         self.text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=1000,
             chunk_overlap=200,
@@ -273,9 +280,9 @@ def main() -> None:
         page_icon="📚",
         layout="wide")
 
-    st.title("📚 RAG Document Upload & Search System (LangChain)")
+    st.title("📚 RAG Document Upload & Search System (LangChain + Ollama)")
     st.markdown(
-        "Upload documents (PDF, DOC, DOCX, XLS, XLSX) and search through them using LangChain with Gemini embeddings"
+        "Upload documents (PDF, DOC, DOCX, XLS, XLSX) and search through them using LangChain with Ollama embeddings"
     )
 
     # Initialize RAG system
