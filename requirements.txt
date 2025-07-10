@@ -14,3 +14,15 @@ langchain-community
 langchain-core
 langchain-google-genai
 faiss-cpu
+faiss-cpu
+google-generativeai
+langchain
+langchain-community
+langchain-core
+langchain-google-genai
+numpy
+openpyxl
+pandas
+PyPDF2
+python-docx
+streamlit

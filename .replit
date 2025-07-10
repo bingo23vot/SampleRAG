@@ -25,6 +25,10 @@ args = "Run Streamlit App"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
+args = "python -m pip install -r requirements.txt"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
 args = "streamlit run app.py --server.address=0.0.0.0 --server.port=5000 --server.headless=true"
 
 [[ports]]
