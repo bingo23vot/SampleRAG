@@ -26,3 +26,13 @@ pandas
 PyPDF2
 python-docx
 streamlit
+faiss-cpu
+langchain
+langchain-community
+langchain-google-genai
+numpy
+openpyxl
+pandas
+PyPDF2
+python-docx
+streamlit
