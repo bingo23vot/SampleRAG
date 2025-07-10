@@ -12,7 +12,7 @@ from docx import Document
 import pandas as pd
 
 # LangChain imports
-from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
+from langchain_ollama import OllamaEmbeddings, ChatOllama
 from langchain_core.documents import Document as LangChainDocument
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.vectorstores import FAISS
